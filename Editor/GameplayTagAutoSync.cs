@@ -1,7 +1,6 @@
 ﻿#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Reflection;
 using UnityEditor;
 using UnityEngine;
@@ -84,17 +83,7 @@ namespace RadioDecadance.GameplayTags.Editor
             var cfg = GameplayTagConfigUtility.LoadConfig();
             if (cfg == null)
             {
-                // Create under Assets/Resources if missing
-                string resourcesPath = "Assets/Resources";
-                if (!AssetDatabase.IsValidFolder(resourcesPath))
-                {
-                    string assets = "Assets";
-                    AssetDatabase.CreateFolder(assets, "Resources");
-                }
-                string assetPath = Path.Combine(resourcesPath, "GameplayTagConfig.asset");
-                cfg = ScriptableObject.CreateInstance<GameplayTagConfig>();
-                AssetDatabase.CreateAsset(cfg, assetPath);
-                AssetDatabase.SaveAssets();
+                
             }
 
             // Update generated tags and merge into tags

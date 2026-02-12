@@ -1,8 +1,15 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using UnityEngine;
 using UnityEngine.AddressableAssets;
+
+#if UNITY_EDITOR
+using UnityEditor;
+using UnityEditor.AddressableAssets;
+using UnityEditor.AddressableAssets.Settings;
+#endif
 
 namespace RadioDecadance.GameplayTags
 {
@@ -130,16 +137,64 @@ namespace RadioDecadance.GameplayTags
             if (_cached != null) return _cached;
 
 #if UNITY_EDITOR
-            // In editor, try to locate it anywhere in the project so drawers can work without Addressables set up yet
-            string[] guids = UnityEditor.AssetDatabase.FindAssets("t:GameplayTagConfig");
-            if (guids != null && guids.Length > 0)
+            
+            // Create under Assets/Data if missing
+            string resourcesPath = "Assets/Data";
+            if (!UnityEditor.AssetDatabase.IsValidFolder(resourcesPath))
             {
-                string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guids[0]);
-                _cached = UnityEditor.AssetDatabase.LoadAssetAtPath<GameplayTagConfig>(path);
+                string assets = "Assets";
+                UnityEditor.AssetDatabase.CreateFolder(assets, "Data");
             }
+            string assetPath = Path.Combine(resourcesPath, "GameplayTagConfig.asset");
+            _cached = ScriptableObject.CreateInstance<GameplayTagConfig>();
+            UnityEditor.AssetDatabase.CreateAsset(_cached, assetPath);
+            UnityEditor.AssetDatabase.SaveAssets();
+
+            MarkAsAddressable(_cached);
 #endif
+
             return _cached;
         }
+
+#if UNITY_EDITOR
+        
+        private static void MarkAsAddressable(GameplayTagConfig config)
+        {
+            AddressableAssetSettings settings = AddressableAssetSettingsDefaultObject.Settings;
+            if (settings == null)
+            {
+                Debug.LogError("Addressable Asset Settings not found. Please create one in the Addressables Groups window.");
+                return;
+            }
+
+            AddressableAssetGroup group = settings.DefaultGroup;
+            if (group == null)
+            {
+                Debug.LogError($"Default group is not created.");
+
+                return;
+            }
+            
+            var assetPath = AssetDatabase.GetAssetPath(config);
+            string guid = AssetDatabase.AssetPathToGUID(assetPath);
+            
+            AddressableAssetEntry entry = settings.CreateOrMoveEntry(guid, group);
+
+            if (entry != null)
+            { 
+                entry.SetAddress(AddressableKey);
+                EditorUtility.SetDirty(settings);
+                AssetDatabase.SaveAssets();
+            }
+            else
+            {
+                Debug.LogError($"Failed to add asset: {assetPath} to group: {group.Name}");
+            }
+
+        }
+        
+#endif
+        
 
         public static List<string> GetAllTags()
         {
