@@ -60,10 +60,10 @@ namespace RadioDecadance.GameplayTags.Editor
                 if (val is GameplayTag tag && tag.IsValid)
                 {
                     // First try resolve via database, then fall back to editor-known mapping
-                    string name = GameplayTagDatabase.ResolveName(tag.Id);
+                    string name = GameplayTagDatabase.ResolveName(tag.id);
                     if (string.IsNullOrEmpty(name))
                     {
-                        name = GameplayTag.GetKnownNameForIdInEditor(tag.Id);
+                        name = GameplayTag.GetKnownNameForIdInEditor(tag.id);
                     }
                     if (!string.IsNullOrEmpty(name))
                     {

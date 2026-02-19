@@ -19,7 +19,7 @@ namespace RadioDecadance.GameplayTags
     [Serializable]
     public struct GameplayTag : IEquatable<GameplayTag>
     {
-        public int Id;
+        public int id;
 
         public static readonly GameplayTag None = new GameplayTag(0);
 
@@ -30,7 +30,7 @@ namespace RadioDecadance.GameplayTags
 
         private GameplayTag(int id)
         {
-            this.Id = id;
+            this.id = id;
         }
 
         public static GameplayTag FromId(int id) => new GameplayTag(id);
@@ -49,15 +49,15 @@ namespace RadioDecadance.GameplayTags
             return new GameplayTag(id);
         }
 
-        public bool IsNone => Id == 0;
-        public bool IsValid => Id != 0;
+        public bool IsNone => id == 0;
+        public bool IsValid => id != 0;
 
-        public bool Equals(GameplayTag other) => Id == other.Id;
+        public bool Equals(GameplayTag other) => id == other.id;
         public override bool Equals(object obj) => obj is GameplayTag other && Equals(other);
-        public override int GetHashCode() => Id;
+        public override int GetHashCode() => id;
 
-        public static bool operator ==(GameplayTag a, GameplayTag b) => a.Id == b.Id;
-        public static bool operator !=(GameplayTag a, GameplayTag b) => a.Id != b.Id;
+        public static bool operator ==(GameplayTag a, GameplayTag b) => a.id == b.id;
+        public static bool operator !=(GameplayTag a, GameplayTag b) => a.id != b.id;
         public static implicit operator GameplayTag(int id) => GameplayTag.FromId(id);
         public static implicit operator GameplayTag(string id) => GameplayTag.FromString(id);
         public static implicit operator string(GameplayTag tag) => tag.ToString();
@@ -68,8 +68,8 @@ namespace RadioDecadance.GameplayTags
         public bool MatchesOrChildOf(GameplayTag parent)
         {
             if (parent.IsNone) return false;
-            if (Id == parent.Id) return true;
-            return GameplayTagDatabase.IsChildOf(Id, parent.Id);
+            if (id == parent.id) return true;
+            return GameplayTagDatabase.IsChildOf(id, parent.id);
         }
         
         /// <summary>
@@ -77,14 +77,14 @@ namespace RadioDecadance.GameplayTags
         /// </summary>
         public override string ToString()
         {
-            string name = GameplayTagDatabase.ResolveName(Id);
+            string name = GameplayTagDatabase.ResolveName(id);
             #if UNITY_EDITOR
             if (string.IsNullOrEmpty(name))
             {
-                _editorKnownNames.TryGetValue(Id, out name);
+                _editorKnownNames.TryGetValue(id, out name);
             }
             #endif
-            return string.IsNullOrEmpty(name) ? $"#{Id}" : name;
+            return string.IsNullOrEmpty(name) ? $"#{id}" : name;
         }
 
         /// <summary>

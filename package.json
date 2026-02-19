@@ -1,6 +1,6 @@
 {
   "name": "com.radiodecadance.gameplaytags",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "displayName": "Radio Decadance Gameplay Tags",
   "description": "Gameplay tags that can be used to mark any gameplay features using hierarchy checks.",
   "unity": "6000.2",
