@@ -277,12 +277,7 @@ namespace RadioDecadance.GameplayTags.Editor
                 var rootNode = BuildTree(allTags);
 
                 // (None) option
-                var noneContainer = new VisualElement();
-                noneContainer.style.flexDirection = FlexDirection.Row;
-                noneContainer.style.paddingLeft = 5;
-                noneContainer.style.paddingRight = 5;
-                noneContainer.style.height = EditorGUIUtility.singleLineHeight;
-                noneContainer.style.alignItems = Align.Center;
+                var noneContainer = CreateNodeParentElement(5);
 
                 noneContainer.Add(new Label("(None)") { style = { flexGrow = 1 } });
 
@@ -379,11 +374,7 @@ namespace RadioDecadance.GameplayTags.Editor
                     bool searching = !string.IsNullOrEmpty(_search?.Trim());
                     bool expanded = searching || GetFoldout(child.FullPath);
 
-                    var row = new VisualElement();
-                    row.style.flexDirection = FlexDirection.Row;
-                    row.style.paddingLeft = depth * 16;
-                    row.style.height = EditorGUIUtility.singleLineHeight;
-                    row.style.alignItems = Align.Center;
+                    var row = CreateNodeParentElement(depth * 16);
 
                     VisualElement contentContainer = row;
 
@@ -476,6 +467,19 @@ namespace RadioDecadance.GameplayTags.Editor
                         DrawTree(parent, child, depth + 1);
                     }
                 }
+            }
+
+            private static VisualElement CreateNodeParentElement(int paddingLeft)
+            {
+                var row = new VisualElement();
+                row.style.flexDirection = FlexDirection.Row;
+                row.style.paddingLeft = paddingLeft;
+                row.style.height = EditorGUIUtility.singleLineHeight;
+                row.style.alignItems = Align.Center;
+                row.style.borderBottomWidth = 2;
+                row.style.borderBottomColor = new Color(0f, 0f, 0f, 0.3f);
+
+                return row;
             }
         }
 
