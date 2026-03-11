@@ -4,6 +4,7 @@ using UnityEditor;
 using UnityEditor.UIElements;
 using UnityEngine;
 using UnityEngine.UIElements;
+using Object = UnityEngine.Object;
 using PopupWindow = UnityEditor.PopupWindow;
 
 namespace RadioDecadance.GameplayTags.Editor
@@ -47,10 +48,15 @@ namespace RadioDecadance.GameplayTags.Editor
             button.style.flexGrow = 1;
             button.style.unityTextAlign = TextAnchor.MiddleLeft;
 
+            Object target = property.serializedObject.targetObject;
+            string propPath = idProp.propertyPath;
+            
             // Update button text
             void UpdateButtonText()
             {
-                int currentId = idProp.intValue;
+                var serializedObject = new SerializedObject(target);
+                var currentIdProp = serializedObject.FindProperty(propPath);
+                int currentId = currentIdProp.intValue;
                 string currentName = currentId == 0 ? "(None)" : (GameplayTagDatabase.ResolveName(currentId) ?? $"#{currentId}");
                 button.text = currentName;
             }
@@ -61,7 +67,7 @@ namespace RadioDecadance.GameplayTags.Editor
             button.clicked += () =>
             {
                 var rect = GUIUtility.GUIToScreenRect(button.worldBound);
-                var popup = new TagSelectorWindow(property.serializedObject, idProp, UpdateButtonText);
+                var popup = new TagSelectorWindow(property.serializedObject.targetObject, idProp.propertyPath, UpdateButtonText);
                 PopupWindow.Show(rect, popup);
             };
 
@@ -123,7 +129,7 @@ namespace RadioDecadance.GameplayTags.Editor
             bool clicked = GUI.Button(fieldRect, currentName, EditorStyles.objectField);
             if (clicked && Event.current != null && Event.current.button == 0)
             {
-                var popup = new TagSelectorWindow(property.serializedObject, idProp, null);
+                var popup = new TagSelectorWindow(property.serializedObject.targetObject, idProp.propertyPath, null);
                 PopupWindow.Show(fieldRect, popup);
             }
 
@@ -151,17 +157,17 @@ namespace RadioDecadance.GameplayTags.Editor
 
         private sealed class TagSelectorWindow : PopupWindowContent
         {
-            private readonly SerializedObject _so;
-            private readonly SerializedProperty _idProp;
+            private readonly UnityEngine.Object _target;
+            private readonly string _idPropPath;
             private readonly Action _onValueChanged;
-            private Vector2 _scroll;
-            private Rect _lastActivatorRect;
             private string _search = string.Empty;
+            private ScrollView _scrollView;
+            private VisualElement _treeRoot;
 
-            public TagSelectorWindow(SerializedObject so, SerializedProperty idProp, Action onValueChanged)
+            public TagSelectorWindow(UnityEngine.Object target, string idPropPath, Action onValueChanged)
             {
-                _so = so;
-                _idProp = idProp;
+                _target = target;
+                _idPropPath = idPropPath;
                 _onValueChanged = onValueChanged;
             }
 
@@ -170,13 +176,22 @@ namespace RadioDecadance.GameplayTags.Editor
                 return new Vector2(360, 420);
             }
 
+            private SerializedProperty GetIdProperty(out SerializedObject so)
+            {
+                so = null;
+                if (_target == null) return null;
+                so = new SerializedObject(_target);
+                return so.FindProperty(_idPropPath);
+            }
+
             public override void OnOpen()
             {
                 GameplayTagDatabase.Build();
 
                 try
                 {
-                    int selId = _idProp != null ? _idProp.intValue : 0;
+                    var idProp = GetIdProperty(out _);
+                    int selId = idProp != null ? idProp.intValue : 0;
                     if (selId != 0)
                     {
                         string selectedName = GameplayTagDatabase.ResolveName(selId);
@@ -193,25 +208,16 @@ namespace RadioDecadance.GameplayTags.Editor
                     }
                 }
                 catch { /* no-op */ }
-            }
 
-            public override void OnGUI(Rect rect)
-            {
-                if (Event.current.type == EventType.Repaint)
-                {
-                    _lastActivatorRect = rect;
-                }
+                var root = editorWindow.rootVisualElement;
 
-                var allTags = GameplayTagConfigUtility.GetAllTags();
-                var root = BuildTree(allTags);
+                // Toolbar
+                var toolbar = new Toolbar();
+                toolbar.Add(new Label("Select Gameplay Tag") { style = { fontSize = 10, alignSelf = Align.Center, marginLeft = 5 } });
+                var spacer = new VisualElement { style = { flexGrow = 1 } };
+                toolbar.Add(spacer);
 
-                GUILayout.BeginVertical();
-
-                // Header
-                GUILayout.BeginHorizontal(EditorStyles.toolbar);
-                GUILayout.Label("Select Gameplay Tag", EditorStyles.miniLabel);
-                GUILayout.FlexibleSpace();
-                if (GUILayout.Button("Open Config", EditorStyles.toolbarButton, GUILayout.Width(90)))
+                var openConfigBtn = new ToolbarButton(() =>
                 {
                     var cfg = GameplayTagConfigUtility.LoadConfig();
                     if (cfg != null)
@@ -223,61 +229,89 @@ namespace RadioDecadance.GameplayTags.Editor
                     {
                         EditorUtility.DisplayDialog("Gameplay Tags", "GameplayTagConfig asset not found. Create one under Resources to store tags.", "OK");
                     }
-                }
-                if (GUILayout.Button("Add Tag", EditorStyles.toolbarButton, GUILayout.Width(70)))
+                }) { text = "Open Config", style = { width = 90 } };
+                toolbar.Add(openConfigBtn);
+
+                var addTagBtn = new ToolbarButton();
+                addTagBtn.text = "Add Tag";
+                addTagBtn.style.width = 70;
+                addTagBtn.clicked += () =>
                 {
-                    PopupWindow.Show(_lastActivatorRect, new AddTagPopup(() =>
+                    var rect = GUIUtility.GUIToScreenRect(addTagBtn.worldBound);
+                    PopupWindow.Show(rect, new AddTagPopup(() =>
                     {
                         GameplayTagDatabase.Build();
-                        editorWindow.Repaint();
+                        RefreshTree();
                     }));
-                }
-                GUILayout.EndHorizontal();
+                };
+                toolbar.Add(addTagBtn);
+                root.Add(toolbar);
 
                 // Search
-                GUILayout.BeginHorizontal(EditorStyles.toolbar);
-                var searchStyle = GUI.skin.FindStyle("ToolbarSearchTextField") ?? GUI.skin.FindStyle("ToolbarSeachTextField") ?? EditorStyles.toolbarSearchField;
-                var cancelStyle = GUI.skin.FindStyle("ToolbarSearchCancelButton") ?? GUI.skin.FindStyle("ToolbarSeachCancelButton");
-                string newSearch = GUILayout.TextField(_search, searchStyle);
-                if (cancelStyle != null)
+                var searchToolbar = new Toolbar();
+                var searchField = new ToolbarSearchField();
+                searchField.style.flexGrow = 1;
+                searchField.RegisterValueChangedCallback(evt =>
                 {
-                    if (GUILayout.Button(GUIContent.none, cancelStyle))
+                    _search = evt.newValue;
+                    RefreshTree();
+                });
+                searchToolbar.Add(searchField);
+                root.Add(searchToolbar);
+
+                // ScrollView
+                _scrollView = new ScrollView();
+                _scrollView.style.flexGrow = 1;
+                _treeRoot = new VisualElement();
+                _scrollView.Add(_treeRoot);
+                root.Add(_scrollView);
+
+                RefreshTree();
+            }
+
+            private void RefreshTree()
+            {
+                _treeRoot.Clear();
+
+                var allTags = GameplayTagConfigUtility.GetAllTags();
+                var rootNode = BuildTree(allTags);
+
+                // (None) option
+                var noneContainer = new VisualElement();
+                noneContainer.style.flexDirection = FlexDirection.Row;
+                noneContainer.style.paddingLeft = 5;
+                noneContainer.style.paddingRight = 5;
+                noneContainer.style.height = EditorGUIUtility.singleLineHeight;
+                noneContainer.style.alignItems = Align.Center;
+
+                noneContainer.Add(new Label("(None)") { style = { flexGrow = 1 } });
+
+                var idPropNone = GetIdProperty(out var soNone);
+                bool noneSelected = idPropNone != null && idPropNone.intValue == 0;
+                var noneToggle = new Toggle { value = noneSelected, style = { width = 18 } };
+                noneToggle.RegisterValueChangedCallback(evt =>
+                {
+                    if (evt.newValue)
                     {
-                        newSearch = string.Empty;
-                        GUI.FocusControl(null);
+                        var p = GetIdProperty(out var s);
+                        if (p != null)
+                        {
+                            p.intValue = 0;
+                            s.ApplyModifiedProperties();
+                            _onValueChanged?.Invoke();
+                            editorWindow.Close();
+                        }
                     }
-                }
-                GUILayout.EndHorizontal();
-                if (!string.Equals(_search, newSearch, StringComparison.Ordinal))
-                {
-                    _search = newSearch;
-                }
+                });
+                noneContainer.Add(noneToggle);
+                _treeRoot.Add(noneContainer);
 
-                _scroll = GUILayout.BeginScrollView(_scroll);
+                DrawTree(_treeRoot, rootNode, 0);
+            }
 
-                // None option
-                GUILayout.BeginHorizontal();
-                GUILayout.Label("(None)", GUILayout.ExpandWidth(false));
-                GUILayout.FlexibleSpace();
-                bool noneSelected = _idProp != null && _idProp.intValue == 0;
-                bool noneToggle = GUILayout.Toggle(noneSelected, GUIContent.none, GUILayout.Width(18));
-                if (noneToggle && !noneSelected)
-                {
-                    _so.Update();
-                    _idProp.intValue = 0;
-                    _so.ApplyModifiedProperties();
-                    _onValueChanged?.Invoke();
-                    editorWindow.Close();
-                    GUILayout.EndHorizontal();
-                    GUILayout.EndScrollView();
-                    GUILayout.EndVertical();
-                    return;
-                }
-                GUILayout.EndHorizontal();
-
-                DrawTree(root, 0);
-                GUILayout.EndScrollView();
-                GUILayout.EndVertical();
+            public override void OnGUI(Rect rect)
+            {
+                // UI Toolkit is used instead
             }
 
             private Node BuildTree(List<string> allTags)
@@ -332,7 +366,7 @@ namespace RadioDecadance.GameplayTags.Editor
                 return NodeMatchesFilter(node) || HasVisibleDescendant(node);
             }
 
-            private void DrawTree(Node node, int depth)
+            private void DrawTree(VisualElement parent, Node node, int depth)
             {
                 foreach (var kv in node.Children)
                 {
@@ -342,66 +376,104 @@ namespace RadioDecadance.GameplayTags.Editor
                         continue;
 
                     bool hasChildren = child.Children.Count > 0;
-
-                    Rect row = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight);
-                    float indent = depth * 16f;
-                    var indented = new Rect(row.x + indent, row.y, row.width - indent, row.height);
-
-                    const float btnW = 18f;
-                    const float pad = 4f;
-                    float actionsWidth = btnW + pad + btnW;
-                    var leftRect = new Rect(indented.x, indented.y, Mathf.Max(0f, indented.width - actionsWidth), indented.height);
-                    var checkRect = new Rect(indented.x + indented.width - actionsWidth, indented.y, btnW, indented.height);
-                    var plusRect = new Rect(checkRect.x + btnW + pad, indented.y, btnW, indented.height);
-
-                    bool expanded = GetFoldout(child.FullPath);
                     bool searching = !string.IsNullOrEmpty(_search?.Trim());
-                    if (searching)
-                    {
-                        expanded = true;
-                    }
+                    bool expanded = searching || GetFoldout(child.FullPath);
+
+                    var row = new VisualElement();
+                    row.style.flexDirection = FlexDirection.Row;
+                    row.style.paddingLeft = depth * 16;
+                    row.style.height = EditorGUIUtility.singleLineHeight;
+                    row.style.alignItems = Align.Center;
+
+                    VisualElement contentContainer = row;
 
                     if (hasChildren)
                     {
-                        bool newExpanded = EditorGUI.Foldout(leftRect, expanded, child.Name, true);
-                        if (!searching && newExpanded != expanded)
+                        var foldout = new Foldout { text = child.Name, value = expanded };
+                        // Remove the default toggle and label from the foldout header so we can control it
+                        // but it's easier to just style the foldout itself.
+                        foldout.style.flexGrow = 1;
+                        
+                        if (!searching)
                         {
-                            SetFoldout(child.FullPath, newExpanded);
+                            foldout.RegisterValueChangedCallback(evt =>
+                            {
+                                SetFoldout(child.FullPath, evt.newValue);
+                                RefreshTree();
+                            });
+                        }
+
+                        // We don't want the foldout to wrap its children because we handle recursion manually
+                        var foldoutContent = foldout.Q<VisualElement>(className: "unity-foldout__content");
+                        if (foldoutContent != null) foldoutContent.style.display = DisplayStyle.None;
+
+                        row.Add(foldout);
+                        
+                        var header = foldout.Q<VisualElement>(className: "unity-foldout__input");
+                        if (header != null)
+                        {
+                            // Adjust header to take full width and allow absolute positioning of our buttons if needed
+                            // or just use flexbox.
+                            header.style.flexGrow = 1;
+                            header.style.flexDirection = FlexDirection.Row;
                         }
                     }
                     else
                     {
-                        GUI.Label(leftRect, child.Name);
+                        var label = new Label(child.Name) { style = { flexGrow = 1, marginLeft = 16 } };
+                        row.Add(label);
                     }
 
+                    // Selection Toggle
                     int nodeId = GameplayTagDatabase.ResolveId(child.FullPath);
-                    bool isSelected = _idProp != null && _idProp.intValue == nodeId;
-                    bool newChecked = GUI.Toggle(checkRect, isSelected, GUIContent.none);
-                    if (newChecked != isSelected)
+                    var idProp = GetIdProperty(out _);
+                    bool isSelected = idProp != null && idProp.intValue == nodeId;
+                    
+                    var checkToggle = new Toggle { value = isSelected, style = { width = 18, marginLeft = 4 } };
+                    checkToggle.RegisterValueChangedCallback(evt =>
                     {
-                        _so.Update();
-                        _idProp.intValue = newChecked ? nodeId : 0;
-                        _so.ApplyModifiedProperties();
-                        _onValueChanged?.Invoke();
-                        editorWindow.Close();
-                        return;
-                    }
-
-                    if (GUI.Button(plusRect, "+", EditorStyles.miniButton))
+                        if (evt.newValue)
+                        {
+                            var p = GetIdProperty(out var s);
+                            if (p != null)
+                            {
+                                p.intValue = nodeId;
+                                s.ApplyModifiedProperties();
+                                _onValueChanged?.Invoke();
+                                editorWindow.Close();
+                            }
+                        }
+                    });
+                    
+                    var plusBtn = new Button(() =>
                     {
                         string start = string.IsNullOrEmpty(child.FullPath) ? string.Empty : (child.FullPath.EndsWith(".") ? child.FullPath : child.FullPath + ".");
-                        PopupWindow.Show(_lastActivatorRect, new AddTagPopup(() =>
+                        var rect = GUIUtility.GUIToScreenRect(row.worldBound);
+                        PopupWindow.Show(rect, new AddTagPopup(() =>
                         {
                             GameplayTagDatabase.Build();
                             SetFoldout(child.FullPath, true);
-                            editorWindow.Repaint();
+                            RefreshTree();
                         }, start));
-                    }
+                    }) { text = "+", style = { width = 18, height = 16, paddingLeft = 0, paddingRight = 0, paddingTop = 0, paddingBottom = 0, marginLeft = 4, marginRight = 4 } };
 
-                    if (!hasChildren) continue;
-                    if (searching || GetFoldout(child.FullPath))
+                    // Add buttons to the end of the row/header
+                    var actions = new VisualElement();
+                    actions.style.flexDirection = FlexDirection.Row;
+                    actions.style.position = Position.Absolute;
+                    actions.style.right = 0;
+                    actions.style.top = 0;
+                    actions.style.bottom = 0;
+                    actions.style.alignItems = Align.Center;
+                    actions.Add(checkToggle);
+                    actions.Add(plusBtn);
+                    
+                    row.Add(actions);
+                    parent.Add(row);
+
+                    if (hasChildren && expanded)
                     {
-                        DrawTree(child, depth + 1);
+                        DrawTree(parent, child, depth + 1);
                     }
                 }
             }
@@ -412,8 +484,6 @@ namespace RadioDecadance.GameplayTags.Editor
             private const string InputControlName = "GameplayTag_AddTag_Input";
             private string _input = string.Empty;
             private readonly Action _onDone;
-            private bool _focusPending = true;
-            private bool _caretPending = true;
 
             public AddTagPopup(Action onDone, string initialInput = null)
             {
@@ -426,48 +496,57 @@ namespace RadioDecadance.GameplayTags.Editor
                 return new Vector2(360, 80);
             }
 
+            public override void OnOpen()
+            {
+                var root = editorWindow.rootVisualElement;
+                root.style.paddingLeft = 5;
+                root.style.paddingRight = 5;
+                root.style.paddingTop = 5;
+                root.style.paddingBottom = 5;
+
+                var title = new Label("Add New Gameplay Tag");
+                title.style.unityFontStyleAndWeight = FontStyle.Bold;
+                title.style.marginBottom = 5;
+                root.Add(title);
+
+                var textField = new TextField("Full Tag");
+                textField.name = InputControlName;
+                textField.value = _input;
+                textField.RegisterValueChangedCallback(evt => _input = evt.newValue);
+                root.Add(textField);
+
+                var buttons = new VisualElement();
+                buttons.style.flexDirection = FlexDirection.Row;
+                buttons.style.marginTop = 10;
+                buttons.style.justifyContent = Justify.FlexEnd;
+
+                var cancelButton = new Button(() => editorWindow.Close()) { text = "Cancel" };
+                buttons.Add(cancelButton);
+
+                var confirmButton = new Button(() =>
+                {
+                    TryAddTag(_input.Trim());
+                    editorWindow.Close();
+                    _onDone?.Invoke();
+                }) { text = "Confirm" };
+                
+                // Disable confirm button if input is empty
+                confirmButton.SetEnabled(!string.IsNullOrWhiteSpace(_input));
+                textField.RegisterValueChangedCallback(evt => confirmButton.SetEnabled(!string.IsNullOrWhiteSpace(evt.newValue)));
+                
+                buttons.Add(confirmButton);
+                root.Add(buttons);
+
+                // Focus the text field
+                textField.RegisterCallback<AttachToPanelEvent>(evt =>
+                {
+                    textField.Q("unity-text-input").Focus();
+                });
+            }
+
             public override void OnGUI(Rect rect)
             {
-                GUILayout.Label("Add New Gameplay Tag", EditorStyles.boldLabel);
-
-                GUI.SetNextControlName(InputControlName);
-                _input = EditorGUILayout.TextField("Full Tag", _input);
-
-                if (_focusPending)
-                {
-                    EditorGUI.FocusTextInControl(InputControlName);
-                    _focusPending = false;
-                    _caretPending = true;
-                }
-
-                if (_caretPending && GUI.GetNameOfFocusedControl() == InputControlName)
-                {
-                    var te = (TextEditor)GUIUtility.GetStateObject(typeof(TextEditor), GUIUtility.keyboardControl);
-                    if (te != null)
-                    {
-                        int len = _input?.Length ?? 0;
-                        te.text = _input ?? string.Empty;
-                        te.cursorIndex = len;
-                        te.selectIndex = len;
-                    }
-                    _caretPending = false;
-                }
-
-                GUILayout.BeginHorizontal();
-                if (GUILayout.Button("Cancel"))
-                {
-                    editorWindow.Close();
-                }
-                using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(_input)))
-                {
-                    if (GUILayout.Button("Confirm"))
-                    {
-                        TryAddTag(_input.Trim());
-                        editorWindow.Close();
-                        _onDone?.Invoke();
-                    }
-                }
-                GUILayout.EndHorizontal();
+                // UI Toolkit is used instead
             }
 
             private static void TryAddTag(string fullPath)
