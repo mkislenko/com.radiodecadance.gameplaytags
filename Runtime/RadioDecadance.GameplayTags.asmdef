@@ -1,6 +1,6 @@
 {
     "name": "RadioDecadance.GameplayTags",
-    "rootNamespace": "RadioDecadance",
+    "rootNamespace": "RadioDecadance.GameplayTags",
     "references": [
         "Unity.Addressables",
         "Unity.ResourceManager",

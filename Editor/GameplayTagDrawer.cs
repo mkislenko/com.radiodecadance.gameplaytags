@@ -1,7 +1,10 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using UnityEditor;
+using UnityEditor.UIElements;
 using UnityEngine;
+using UnityEngine.UIElements;
+using PopupWindow = UnityEditor.PopupWindow;
 
 namespace RadioDecadance.GameplayTags.Editor
 {
@@ -17,33 +20,96 @@ namespace RadioDecadance.GameplayTags.Editor
             public SortedDictionary<string, Node> Children = new SortedDictionary<string, Node>(StringComparer.Ordinal);
         }
 
+        // UI Toolkit version - called by new UI system
+        public override VisualElement CreatePropertyGUI(SerializedProperty property)
+        {
+            var container = new VisualElement();
+            container.style.flexDirection = FlexDirection.Row;
+            container.style.alignItems = Align.Center;
+
+            // Find the 'id' field
+            var idProp = property.FindPropertyRelative("id");
+            if (idProp == null)
+            {
+                var errorLabel = new Label("Error: 'id' property not found");
+                errorLabel.style.color = Color.red;
+                return errorLabel;
+            }
+
+            // Label
+            var label = new Label(property.displayName);
+            label.AddToClassList("unity-base-field__label");
+            label.style.minWidth = 120;
+            container.Add(label);
+
+            // Button to show current tag and open selector
+            var button = new Button();
+            button.style.flexGrow = 1;
+            button.style.unityTextAlign = TextAnchor.MiddleLeft;
+
+            // Update button text
+            void UpdateButtonText()
+            {
+                int currentId = idProp.intValue;
+                string currentName = currentId == 0 ? "(None)" : (GameplayTagDatabase.ResolveName(currentId) ?? $"#{currentId}");
+                button.text = currentName;
+            }
+
+            UpdateButtonText();
+
+            // Click handler
+            button.clicked += () =>
+            {
+                var rect = GUIUtility.GUIToScreenRect(button.worldBound);
+                var popup = new TagSelectorWindow(property.serializedObject, idProp, UpdateButtonText);
+                PopupWindow.Show(rect, popup);
+            };
+
+            // Context menu for copy
+            button.AddManipulator(new ContextualMenuManipulator(evt =>
+            {
+                evt.menu.AppendAction("Copy", action =>
+                {
+                    int currentId = idProp.intValue;
+                    string txt = currentId == 0 ? string.Empty : (GameplayTagDatabase.ResolveName(currentId) ?? string.Empty);
+                    EditorGUIUtility.systemCopyBuffer = txt;
+                });
+            }));
+
+            container.Add(button);
+
+            // Track property changes to update button text
+            container.RegisterCallback<AttachToPanelEvent>(evt =>
+            {
+                container.TrackPropertyValue(idProp, prop => UpdateButtonText());
+            });
+
+            return container;
+        }
+
+        // IMGUI fallback for compatibility
         public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
         {
-            // property is a struct; find its 'id' int field
             var idProp = property.FindPropertyRelative("id");
             int currentId = idProp != null ? idProp.intValue : 0;
-
             string currentName = currentId == 0 ? "(None)" : (GameplayTagDatabase.ResolveName(currentId) ?? $"#{currentId}");
 
             EditorGUI.BeginProperty(position, label, property);
 
             bool hasLabel = label != null && !string.IsNullOrEmpty(label.text);
-
             Rect fieldRect = position;
             if (hasLabel)
             {
-                // Draw label and compute field rect like a standard property
                 Rect labelRect = new Rect(position.x, position.y, EditorGUIUtility.labelWidth, position.height);
                 fieldRect = new Rect(position.x + EditorGUIUtility.labelWidth, position.y, position.width - EditorGUIUtility.labelWidth, position.height);
                 EditorGUI.LabelField(labelRect, label);
             }
 
-            // Handle right-click context menu for Copy (support both ContextClick and MouseDown on RMB)
+            // Context menu
             Event evt = Event.current;
             if ((evt.type == EventType.ContextClick || (evt.type == EventType.MouseDown && evt.button == 1)) && fieldRect.Contains(evt.mousePosition))
             {
                 var menu = new GenericMenu();
-                bool hasValue = currentId != 0 && !string.IsNullOrEmpty(GameplayTagDatabase.ResolveName(currentId));
                 menu.AddItem(new GUIContent("Copy"), false, () =>
                 {
                     string txt = currentId == 0 ? string.Empty : (GameplayTagDatabase.ResolveName(currentId) ?? string.Empty);
@@ -51,16 +117,13 @@ namespace RadioDecadance.GameplayTags.Editor
                 });
                 menu.ShowAsContext();
                 evt.Use();
-                // Prevent the button below from reacting to this right-click
-                // Early return is not strictly necessary, but avoids visual press state
             }
 
-            // Entire field acts as a button that opens the selector popup (left-click only)
+            // Button
             bool clicked = GUI.Button(fieldRect, currentName, EditorStyles.objectField);
             if (clicked && Event.current != null && Event.current.button == 0)
             {
-                // Anchor popup to the field rect
-                var popup = new TagSelectorPopup(property.serializedObject, idProp);
+                var popup = new TagSelectorWindow(property.serializedObject, idProp, null);
                 PopupWindow.Show(fieldRect, popup);
             }
 
@@ -74,7 +137,6 @@ namespace RadioDecadance.GameplayTags.Editor
 
         private static bool GetFoldout(string path)
         {
-            // By default, foldouts are collapsed (not expanded)
             if (string.IsNullOrEmpty(path)) return false;
             if (s_Foldout.TryGetValue(path, out var v)) return v;
             s_Foldout[path] = false;
@@ -87,18 +149,20 @@ namespace RadioDecadance.GameplayTags.Editor
             s_Foldout[path] = value;
         }
 
-        private sealed class TagSelectorPopup : PopupWindowContent
+        private sealed class TagSelectorWindow : PopupWindowContent
         {
             private readonly SerializedObject _so;
             private readonly SerializedProperty _idProp;
+            private readonly Action _onValueChanged;
             private Vector2 _scroll;
             private Rect _lastActivatorRect;
             private string _search = string.Empty;
 
-            public TagSelectorPopup(SerializedObject so, SerializedProperty idProp)
+            public TagSelectorWindow(SerializedObject so, SerializedProperty idProp, Action onValueChanged)
             {
                 _so = so;
                 _idProp = idProp;
+                _onValueChanged = onValueChanged;
             }
 
             public override Vector2 GetWindowSize()
@@ -108,10 +172,8 @@ namespace RadioDecadance.GameplayTags.Editor
 
             public override void OnOpen()
             {
-                // Ensure database up to date
                 GameplayTagDatabase.Build();
 
-                // Expand all parent paths for the currently selected tag so it becomes visible
                 try
                 {
                     int selId = _idProp != null ? _idProp.intValue : 0;
@@ -135,37 +197,17 @@ namespace RadioDecadance.GameplayTags.Editor
 
             public override void OnGUI(Rect rect)
             {
-                // Remember activator rect for reopening after Add Tag
                 if (Event.current.type == EventType.Repaint)
                 {
                     _lastActivatorRect = rect;
                 }
 
                 var allTags = GameplayTagConfigUtility.GetAllTags();
-                // Build tree including implicit parents
-                var root = new Node { Name = string.Empty, FullPath = string.Empty };
-                foreach (var tag in allTags)
-                {
-                    if (string.IsNullOrWhiteSpace(tag)) continue;
-                    var parts = tag.Split('.');
-                    Node current = root;
-                    string currentPath = string.Empty;
-                    for (int i = 0; i < parts.Length; i++)
-                    {
-                        string seg = parts[i];
-                        currentPath = string.IsNullOrEmpty(currentPath) ? seg : currentPath + "." + seg;
-                        if (!current.Children.TryGetValue(seg, out var child))
-                        {
-                            child = new Node { Name = seg, FullPath = currentPath };
-                            current.Children.Add(seg, child);
-                        }
-                        current = child;
-                    }
-                }
+                var root = BuildTree(allTags);
 
                 GUILayout.BeginVertical();
 
-                // Header row with Open Config and Add Tag buttons
+                // Header
                 GUILayout.BeginHorizontal(EditorStyles.toolbar);
                 GUILayout.Label("Select Gameplay Tag", EditorStyles.miniLabel);
                 GUILayout.FlexibleSpace();
@@ -184,17 +226,15 @@ namespace RadioDecadance.GameplayTags.Editor
                 }
                 if (GUILayout.Button("Add Tag", EditorStyles.toolbarButton, GUILayout.Width(70)))
                 {
-                    // Open add tag popup; keep this selector open. After adding, rebuild and refresh this window.
                     PopupWindow.Show(_lastActivatorRect, new AddTagPopup(() =>
                     {
                         GameplayTagDatabase.Build();
-                        // Refresh current selector contents
                         editorWindow.Repaint();
                     }));
                 }
                 GUILayout.EndHorizontal();
 
-                // Search field
+                // Search
                 GUILayout.BeginHorizontal(EditorStyles.toolbar);
                 var searchStyle = GUI.skin.FindStyle("ToolbarSearchTextField") ?? GUI.skin.FindStyle("ToolbarSeachTextField") ?? EditorStyles.toolbarSearchField;
                 var cancelStyle = GUI.skin.FindStyle("ToolbarSearchCancelButton") ?? GUI.skin.FindStyle("ToolbarSeachCancelButton");
@@ -214,7 +254,8 @@ namespace RadioDecadance.GameplayTags.Editor
                 }
 
                 _scroll = GUILayout.BeginScrollView(_scroll);
-                // "None" option as the first item in the tree
+
+                // None option
                 GUILayout.BeginHorizontal();
                 GUILayout.Label("(None)", GUILayout.ExpandWidth(false));
                 GUILayout.FlexibleSpace();
@@ -225,6 +266,7 @@ namespace RadioDecadance.GameplayTags.Editor
                     _so.Update();
                     _idProp.intValue = 0;
                     _so.ApplyModifiedProperties();
+                    _onValueChanged?.Invoke();
                     editorWindow.Close();
                     GUILayout.EndHorizontal();
                     GUILayout.EndScrollView();
@@ -235,8 +277,31 @@ namespace RadioDecadance.GameplayTags.Editor
 
                 DrawTree(root, 0);
                 GUILayout.EndScrollView();
-
                 GUILayout.EndVertical();
+            }
+
+            private Node BuildTree(List<string> allTags)
+            {
+                var root = new Node { Name = string.Empty, FullPath = string.Empty };
+                foreach (var tag in allTags)
+                {
+                    if (string.IsNullOrWhiteSpace(tag)) continue;
+                    var parts = tag.Split('.');
+                    Node current = root;
+                    string currentPath = string.Empty;
+                    for (int i = 0; i < parts.Length; i++)
+                    {
+                        string seg = parts[i];
+                        currentPath = string.IsNullOrEmpty(currentPath) ? seg : currentPath + "." + seg;
+                        if (!current.Children.TryGetValue(seg, out var child))
+                        {
+                            child = new Node { Name = seg, FullPath = currentPath };
+                            current.Children.Add(seg, child);
+                        }
+                        current = child;
+                    }
+                }
+                return root;
             }
 
             private bool NodeMatchesFilter(Node node)
@@ -273,19 +338,15 @@ namespace RadioDecadance.GameplayTags.Editor
                 {
                     var child = kv.Value;
 
-                    // Filter: skip nodes that neither match nor have matching descendants when searching
                     if (!string.IsNullOrEmpty(_search?.Trim()) && !PassesFilter(child))
                         continue;
 
                     bool hasChildren = child.Children.Count > 0;
 
-                    // Manual rect-based row to prevent right-side controls from overlapping foldout clickable area
                     Rect row = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight);
-                    // Indentation
                     float indent = depth * 16f;
                     var indented = new Rect(row.x + indent, row.y, row.width - indent, row.height);
 
-                    // Reserve right area for checkbox and '+' button
                     const float btnW = 18f;
                     const float pad = 4f;
                     float actionsWidth = btnW + pad + btnW;
@@ -297,11 +358,9 @@ namespace RadioDecadance.GameplayTags.Editor
                     bool searching = !string.IsNullOrEmpty(_search?.Trim());
                     if (searching)
                     {
-                        // while searching, auto-expand to reveal matching descendants
                         expanded = true;
                     }
 
-                    // Draw foldout with label so text also toggles expansion
                     if (hasChildren)
                     {
                         bool newExpanded = EditorGUI.Foldout(leftRect, expanded, child.Name, true);
@@ -315,7 +374,6 @@ namespace RadioDecadance.GameplayTags.Editor
                         GUI.Label(leftRect, child.Name);
                     }
 
-                    // Checkbox to select this tag
                     int nodeId = GameplayTagDatabase.ResolveId(child.FullPath);
                     bool isSelected = _idProp != null && _idProp.intValue == nodeId;
                     bool newChecked = GUI.Toggle(checkRect, isSelected, GUIContent.none);
@@ -324,11 +382,11 @@ namespace RadioDecadance.GameplayTags.Editor
                         _so.Update();
                         _idProp.intValue = newChecked ? nodeId : 0;
                         _so.ApplyModifiedProperties();
+                        _onValueChanged?.Invoke();
                         editorWindow.Close();
                         return;
                     }
 
-                    // Small + button to add a child tag under this path
                     if (GUI.Button(plusRect, "+", EditorStyles.miniButton))
                     {
                         string start = string.IsNullOrEmpty(child.FullPath) ? string.Empty : (child.FullPath.EndsWith(".") ? child.FullPath : child.FullPath + ".");
@@ -354,7 +412,6 @@ namespace RadioDecadance.GameplayTags.Editor
             private const string InputControlName = "GameplayTag_AddTag_Input";
             private string _input = string.Empty;
             private readonly Action _onDone;
-            // Flags to perform focus and caret move exactly once after the control is created
             private bool _focusPending = true;
             private bool _caretPending = true;
 
@@ -373,29 +430,25 @@ namespace RadioDecadance.GameplayTags.Editor
             {
                 GUILayout.Label("Add New Gameplay Tag", EditorStyles.boldLabel);
 
-                // Name the control so we can focus it and place caret at the end
                 GUI.SetNextControlName(InputControlName);
                 _input = EditorGUILayout.TextField("Full Tag", _input);
 
-                // Request focus once when the popup opens
                 if (_focusPending)
                 {
                     EditorGUI.FocusTextInControl(InputControlName);
                     _focusPending = false;
-                    // We will set caret after focus has been applied
                     _caretPending = true;
                 }
 
-                // When the field is focused, move caret to end exactly once
                 if (_caretPending && GUI.GetNameOfFocusedControl() == InputControlName)
                 {
                     var te = (TextEditor)GUIUtility.GetStateObject(typeof(TextEditor), GUIUtility.keyboardControl);
                     if (te != null)
                     {
                         int len = _input?.Length ?? 0;
-                        te.text = _input ?? string.Empty; // ensure TextEditor has the current text
+                        te.text = _input ?? string.Empty;
                         te.cursorIndex = len;
-                        te.selectIndex = len; // place caret at end without selection
+                        te.selectIndex = len;
                     }
                     _caretPending = false;
                 }
@@ -429,12 +482,10 @@ namespace RadioDecadance.GameplayTags.Editor
 
                 var so = new SerializedObject(cfg);
                 var tagsProp = so.FindProperty("tags");
-                // Check existence
                 for (int i = 0; i < tagsProp.arraySize; i++)
                 {
                     if (string.Equals(tagsProp.GetArrayElementAtIndex(i).stringValue, fullPath, StringComparison.Ordinal))
                     {
-                        // Already exists
                         so.ApplyModifiedProperties();
                         return;
                     }

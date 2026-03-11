@@ -1,6 +1,6 @@
 {
-    "name": "RD.GameplayTags.Editor",
-    "rootNamespace": "RadioDecadance",
+    "name": "RadioDecadance.GameplayTags.Editor",
+    "rootNamespace": "RadioDecadance.GameplayTags.Editor",
     "references": [
         "RadioDecadance.GameplayTags"
     ],
