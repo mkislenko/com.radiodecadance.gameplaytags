@@ -85,10 +85,10 @@ namespace RadioDecadance.GameplayTags.Editor
             container.Add(button);
 
             // Track property changes to update button text
-            container.RegisterCallback<AttachToPanelEvent>(evt =>
-            {
-                container.TrackPropertyValue(idProp, prop => UpdateButtonText());
-            });
+            // container.RegisterCallback<AttachToPanelEvent>(evt =>
+            // {
+            //     container.TrackPropertyValue(idProp, prop => UpdateButtonText());
+            // });
 
             return container;
         }
